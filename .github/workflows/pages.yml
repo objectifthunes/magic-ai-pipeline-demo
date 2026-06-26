@@ -35,6 +35,9 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+        env:
+          # The deployed ai-authority the Studio's "Run live with my keys" calls.
+          NEXT_PUBLIC_AUTHORITY_URL: https://web-production-c571.up.railway.app
       - run: touch out/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -31,7 +31,7 @@ registry.register(createR2StorageProvider())                                    
 // + createKieVideoProvider({ correlator, callbackUrl }) for video → "kie", same pattern.
 
 // 2 — author from one English sentence (self-correcting repair loop).
-//     Want OpenAI images instead of Replicate? Register it and pin the step — nothing else changes.
+//     Want a different image vendor? Write its adapter, register it, pin the step — nothing else changes.
 const snapshot = registry.snapshot()
 const workflow = await compileWorkflow(
   'Write a one-line hook, render a key image, compose a short score, store everything and return the URLs',

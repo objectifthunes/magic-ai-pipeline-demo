@@ -5,12 +5,12 @@
  * the seed for the optional "Compile with Claude" (BYOK) path: the natural
  * language `goal` is what gets sent to `compileWorkflow`.
  *
- * Every step pins an explicit `provider` — that's the point of the demo. The
- * SAME `capability` ("image") runs through DIFFERENT providers ("replicate"
- * vs "openai") in the same pipeline; swap a provider name and nothing else
- * changes. Across the four samples, all five capabilities (text/image/audio/
- * video/storage) and all six providers (anthropic, openai, replicate,
- * elevenlabs, kie, r2) are exercised.
+ * Every step pins an explicit `provider` — that's the point of the demo: the
+ * workflow is declarative data, and each step routes to the provider it names.
+ * Across the three samples, all five capabilities (text/image/audio/video/
+ * storage) and all five live providers (anthropic, replicate, elevenlabs, kie,
+ * r2) are exercised — exactly the set the deployed ai-authority can run with
+ * bring-your-own keys.
  *
  * Reference syntax (from ai-workflow's template engine):
  *   {{ inputs.<name> }}              — a declared workflow input
@@ -100,61 +100,6 @@ export const SAMPLES: Sample[] = [
         keyartUrl: '{{ steps.storeKeyart.output.url }}',
         scoreUrl: '{{ steps.storeScore.output.url }}',
         videoUrl: '{{ steps.clip.output.url }}',
-      },
-    },
-  },
-  {
-    id: 'two-engines',
-    label: 'One brief, two image engines',
-    blurb: 'The agnosticism proof: the SAME image step runs on Replicate AND OpenAI in one pipeline. Swap a provider name — nothing else moves.',
-    caps: ['text', 'image', 'storage'],
-    providers: ['openai', 'replicate', 'r2'],
-    goal: 'From one creative brief, produce two hero images of the same subject — one via Replicate, one via OpenAI — so they can be compared side by side, and store both to R2. Use OpenAI to expand the brief into a vivid prompt first.',
-    inputs: { brief: 'a lighthouse made of stacked vinyl records at golden hour' },
-    workflow: {
-      description: 'Same image capability, two providers (Replicate + OpenAI), one workflow',
-      inputs: { brief: { type: 'string', required: true, description: 'The creative brief' } },
-      steps: [
-        {
-          id: 'prompt',
-          capability: 'text',
-          provider: 'openai',
-          params: {
-            messages: [
-              { role: 'system', content: 'Expand a brief into one vivid image prompt. No preamble.' },
-              { role: 'user', content: '{{ inputs.brief }}' },
-            ],
-          },
-        },
-        {
-          id: 'heroReplicate',
-          capability: 'image',
-          provider: 'replicate',
-          params: { prompt: '{{ steps.prompt.output.text }}', aspectRatio: '3:2', quality: 'high' },
-        },
-        {
-          id: 'heroOpenai',
-          capability: 'image',
-          provider: 'openai',
-          params: { prompt: '{{ steps.prompt.output.text }}', aspectRatio: '3:2', quality: 'high' },
-        },
-        {
-          id: 'storeReplicate',
-          capability: 'storage',
-          provider: 'r2',
-          params: { key: 'ab/hero-replicate.png', bytes: '{{ steps.heroReplicate.output.bytes }}', contentType: '{{ steps.heroReplicate.output.contentType }}' },
-        },
-        {
-          id: 'storeOpenai',
-          capability: 'storage',
-          provider: 'r2',
-          params: { key: 'ab/hero-openai.png', bytes: '{{ steps.heroOpenai.output.bytes }}', contentType: '{{ steps.heroOpenai.output.contentType }}' },
-        },
-      ],
-      output: {
-        prompt: '{{ steps.prompt.output.text }}',
-        replicateUrl: '{{ steps.storeReplicate.output.url }}',
-        openaiUrl: '{{ steps.storeOpenai.output.url }}',
       },
     },
   },

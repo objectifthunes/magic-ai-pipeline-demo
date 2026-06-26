@@ -1,25 +1,25 @@
 'use client'
 
 /**
- * The Workflow Studio — the interactive centrepiece. Everything here runs in
- * the visitor's browser against the REAL @objectifthunes/ai-core +
- * @objectifthunes/ai-workflow engines:
+ * The Workflow Studio — the interactive centrepiece.
  *
- *   • Validate → the real `validateWorkflow` against a fake-adapter registry
- *     snapshot. Deterministic, free, always live.
- *   • Run      → the real `runWorkflow` against FAKE adapters, so a run never
- *     calls a provider and never costs anything.
- *   • Compile  → optional, off by default. When the visitor pastes their OWN
- *     Anthropic key we build a real provider-anthropic port over the browser
- *     SDK and call the real `compileWorkflow`. It spends the visitor's tokens,
- *     never the project's.
+ *   • Validate  → the real `validateWorkflow` against a fake-adapter registry
+ *     snapshot. Deterministic, free, always live, no key.
+ *   • Simulate  → the real `runWorkflow` against FAKE adapters in your browser,
+ *     so it never calls a provider and never costs anything.
+ *   • Compile / Run live → bring your own keys. They are POSTed to the deployed
+ *     @objectifthunes/ai-authority (thin NestJS on Railway), which builds an
+ *     ai-core registry from your keys, registers the REAL provider-* adapters,
+ *     and runs compileWorkflow / runWorkflow server-side. Your keys go only to
+ *     the authority, for that one request, and are never stored or logged.
  */
 import { useMemo, useState } from 'react'
-import { Sparkles, Play, ShieldCheck, KeyRound, Wand2, ChevronRight, Shuffle } from 'lucide-react'
+import { Sparkles, Play, ShieldCheck, KeyRound, Wand2, ChevronRight, Rocket } from 'lucide-react'
 import { Button, Alert, Chip, Surface } from '@objectifthunes/whiteboard'
-import { validateWorkflow, runWorkflow, type WorkflowProblem, type StepResult } from '@objectifthunes/ai-workflow'
+import { validateWorkflow, runWorkflow, type StepResult } from '@objectifthunes/ai-workflow'
 import { createFakeRegistry } from '@/lib/fakeRegistry'
 import { SAMPLES, type Sample } from '@/lib/sampleWorkflows'
+import { runLive, compileLive, type Keys, AUTHORITY_URL } from '@/lib/authorityClient'
 
 type TraceStatus = 'pending' | 'running' | 'done'
 interface TraceRow {
@@ -30,19 +30,40 @@ interface TraceRow {
   summary?: string
 }
 
+interface DisplayProblem {
+  code: string
+  message: string
+  stepId?: string
+}
+
 type ValidationState =
   | { kind: 'idle' }
   | { kind: 'ok' }
-  | { kind: 'problems'; problems: WorkflowProblem[] }
+  | { kind: 'problems'; problems: DisplayProblem[] }
   | { kind: 'parse'; message: string }
+
+const EMPTY_KEYS: Keys = {
+  anthropic: '',
+  replicate: '',
+  elevenlabs: '',
+  kie: '',
+  r2: { accountId: '', bucket: '', accessKeyId: '', secretAccessKey: '', publicUrl: '' },
+}
 
 const pretty = (w: unknown) => JSON.stringify(w, null, 2)
 
 function summarizeOutput(value: unknown): string {
-  if (value && typeof value === 'object' && 'bytes' in (value as Record<string, unknown>)) {
-    const v = value as { bytes?: Uint8Array; contentType?: string }
-    const len = v.bytes instanceof Uint8Array ? v.bytes.length : 0
-    return `${v.contentType ?? 'bytes'} · ${len} byte${len === 1 ? '' : 's'}`
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>
+    if (typeof v.url === 'string') return v.url
+    if (typeof v.text === 'string') return v.text
+    if ('bytes' in v) {
+      const ct = typeof v.contentType === 'string' ? v.contentType : 'binary'
+      const b = v.bytes
+      const len =
+        b instanceof Uint8Array ? b.length : Array.isArray(b) ? b.length : b && typeof b === 'object' ? Object.keys(b).length : 0
+      return `${ct} · ${len} byte${len === 1 ? '' : 's'}`
+    }
   }
   if (typeof value === 'string') return value
   return JSON.stringify(value)
@@ -53,7 +74,7 @@ function isUrl(value: unknown): value is string {
 }
 
 export default function WorkflowStudio() {
-  // The registry is built ONCE from fake adapters; Run always targets it.
+  // The registry is built ONCE from fake adapters; Validate + Simulate target it.
   const registry = useMemo(() => createFakeRegistry(), [])
   const snapshot = useMemo(() => registry.snapshot(), [registry])
 
@@ -61,28 +82,24 @@ export default function WorkflowStudio() {
   const [goal, setGoal] = useState(SAMPLES[0].goal)
   const [text, setText] = useState(pretty(SAMPLES[0].workflow))
 
-  const [apiKey, setApiKey] = useState('')
+  const [keys, setKeys] = useState<Keys>(EMPTY_KEYS)
   const [compiling, setCompiling] = useState(false)
   const [compileError, setCompileError] = useState<string | null>(null)
-
-  // Steps parsed from the (possibly mid-edit) JSON — drives the provider-swap row.
-  const parsedSteps = useMemo<{ id: string; capability: string; provider?: string }[]>(() => {
-    try {
-      const w = JSON.parse(text) as { steps?: { id?: unknown; capability?: unknown; provider?: unknown }[] }
-      if (!Array.isArray(w.steps)) return []
-      return w.steps
-        .filter(s => s && typeof s.id === 'string' && typeof s.capability === 'string')
-        .map(s => ({ id: s.id as string, capability: s.capability as string, provider: typeof s.provider === 'string' ? s.provider : undefined }))
-    } catch {
-      return []
-    }
-  }, [text])
 
   const [validation, setValidation] = useState<ValidationState>({ kind: 'idle' })
   const [trace, setTrace] = useState<TraceRow[]>([])
   const [outputs, setOutputs] = useState<Record<string, unknown> | null>(null)
+  const [outputsLive, setOutputsLive] = useState(false)
   const [running, setRunning] = useState(false)
+  const [liveRunning, setLiveRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
+
+  function setKey(field: Exclude<keyof Keys, 'r2'>, value: string) {
+    setKeys(k => ({ ...k, [field]: value }))
+  }
+  function setR2(field: keyof NonNullable<Keys['r2']>, value: string) {
+    setKeys(k => ({ ...k, r2: { ...k.r2!, [field]: value } }))
+  }
 
   function selectSample(s: Sample) {
     setSample(s)
@@ -91,6 +108,7 @@ export default function WorkflowStudio() {
     setValidation({ kind: 'idle' })
     setTrace([])
     setOutputs(null)
+    setOutputsLive(false)
     setRunError(null)
     setCompileError(null)
   }
@@ -101,6 +119,12 @@ export default function WorkflowStudio() {
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : 'Invalid JSON' }
     }
+  }
+
+  function buildInputs(wf: { inputs?: Record<string, unknown> }): Record<string, unknown> {
+    const inputs: Record<string, unknown> = {}
+    for (const key of Object.keys(wf.inputs ?? {})) inputs[key] = sample.inputs[key] ?? `demo ${key}`
+    return inputs
   }
 
   function onValidate() {
@@ -115,33 +139,26 @@ export default function WorkflowStudio() {
     setValidation(result.ok ? { kind: 'ok' } : { kind: 'problems', problems: result.problems })
   }
 
-  async function onRun() {
+  // Free, in-browser run against fake adapters.
+  async function onSimulate() {
     setRunError(null)
     setOutputs(null)
+    setOutputsLive(false)
     const parsed = parseWorkflow()
     if (!parsed.ok) {
       setValidation({ kind: 'parse', message: parsed.message })
       return
     }
     const wf = parsed.wf as { steps?: { id: string; capability: string; provider?: string }[]; inputs?: Record<string, unknown> }
-    // Seed the trace from the declared steps so every row (and its pinned provider) is visible up front.
     setTrace((wf.steps ?? []).map(s => ({ stepId: s.id, capability: s.capability, provider: s.provider, status: 'pending' as const })))
-    // Build run inputs from the declared inputs, seeded from the sample.
-    const inputs: Record<string, unknown> = {}
-    for (const key of Object.keys(wf.inputs ?? {})) {
-      inputs[key] = sample.inputs[key] ?? `demo ${key}`
-    }
     setRunning(true)
     try {
-      const res = await runWorkflow(parsed.wf as Parameters<typeof runWorkflow>[0], registry, inputs, {
-        onStepStart: (id) =>
-          setTrace(rows => rows.map(r => (r.stepId === id ? { ...r, status: 'running' } : r))),
+      const res = await runWorkflow(parsed.wf as Parameters<typeof runWorkflow>[0], registry, buildInputs(wf), {
+        onStepStart: id => setTrace(rows => rows.map(r => (r.stepId === id ? { ...r, status: 'running' } : r))),
         onStepDone: (r: StepResult) =>
           setTrace(rows =>
             rows.map(row =>
-              row.stepId === r.stepId
-                ? { ...row, status: 'done', provider: r.provider, summary: summarizeOutput(r.output) }
-                : row,
+              row.stepId === r.stepId ? { ...row, status: 'done', provider: r.provider, summary: summarizeOutput(r.output) } : row,
             ),
           ),
       })
@@ -154,54 +171,70 @@ export default function WorkflowStudio() {
     }
   }
 
-  async function onCompile() {
-    if (!apiKey.trim()) {
-      setCompileError('Paste your own Anthropic API key first — compilation uses your key and your tokens.')
-      return
-    }
-    setCompiling(true)
-    setCompileError(null)
-    try {
-      const [{ default: Anthropic }, { createAnthropicTextProvider }, { compileWorkflow }] = await Promise.all([
-        import('@anthropic-ai/sdk'),
-        import('@objectifthunes/provider-anthropic'),
-        import('@objectifthunes/ai-workflow'),
-      ])
-      const client = new Anthropic({ apiKey: apiKey.trim(), dangerouslyAllowBrowser: true })
-      // The Anthropic SDK's overloaded messages.create is stricter than the
-      // adapter's structural AnthropicLike seam, so cast at the injection point.
-      const port = createAnthropicTextProvider({ client: client as never })
-      const wf = await compileWorkflow(goal, snapshot, port)
-      setText(pretty(wf))
-      setValidation({ kind: 'idle' })
-      setTrace([])
-      setOutputs(null)
-    } catch (e) {
-      setCompileError(
-        e instanceof Error
-          ? `Compilation failed: ${e.message}. (A browser request may be blocked by Anthropic CORS, or the key/credits may be invalid.)`
-          : 'Compilation failed.',
-      )
-    } finally {
-      setCompiling(false)
-    }
-  }
-
-  // ── Provider swap: route a step to a different provider, re-validate live ──
-  function setStepProvider(stepId: string, provider: string) {
+  // Real run: POST the workflow + your keys to the authority.
+  async function onRunLive() {
+    setRunError(null)
+    setOutputs(null)
+    setOutputsLive(false)
     const parsed = parseWorkflow()
     if (!parsed.ok) {
       setValidation({ kind: 'parse', message: parsed.message })
       return
     }
-    const steps = (parsed.wf as { steps?: Record<string, unknown>[] }).steps
-    const step = steps?.find(s => s.id === stepId)
-    if (step) step.provider = provider
-    setText(pretty(parsed.wf))
-    const result = validateWorkflow(parsed.wf, snapshot)
-    setValidation(result.ok ? { kind: 'ok' } : { kind: 'problems', problems: result.problems })
-    setOutputs(null)
-    setTrace([])
+    const wf = parsed.wf as { steps?: { id: string; capability: string; provider?: string }[]; inputs?: Record<string, unknown> }
+    setTrace((wf.steps ?? []).map(s => ({ stepId: s.id, capability: s.capability, provider: s.provider, status: 'running' as const })))
+    setLiveRunning(true)
+    try {
+      const res = await runLive(parsed.wf, buildInputs(wf), keys)
+      if (res.ok) {
+        setTrace(rows =>
+          rows.map(r => {
+            const st = res.steps[r.stepId]
+            return st ? { ...r, status: 'done', provider: st.provider, summary: summarizeOutput(st.output) } : { ...r, status: 'done' }
+          }),
+        )
+        setOutputs(res.outputs)
+        setOutputsLive(true)
+        setValidation({ kind: 'ok' })
+      } else if (res.problems?.length) {
+        setValidation({ kind: 'problems', problems: res.problems })
+        setTrace([])
+      } else {
+        setRunError(res.error ?? 'The authority could not run this workflow.')
+        setTrace(rows => rows.map(r => ({ ...r, status: 'pending' as const })))
+      }
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : 'Run failed')
+      setTrace(rows => rows.map(r => ({ ...r, status: 'pending' as const })))
+    } finally {
+      setLiveRunning(false)
+    }
+  }
+
+  // Author from English via the authority's /compile (uses your Anthropic key).
+  async function onCompile() {
+    if (!keys.anthropic?.trim()) {
+      setCompileError('Paste your Anthropic key in the panel below — the authority compiles with your key and your tokens.')
+      return
+    }
+    setCompiling(true)
+    setCompileError(null)
+    try {
+      const res = await compileLive(goal, keys)
+      if (res.ok) {
+        setText(pretty(res.workflow))
+        setValidation({ kind: 'idle' })
+        setTrace([])
+        setOutputs(null)
+        setOutputsLive(false)
+      } else {
+        setCompileError(res.error || 'Compilation failed.')
+      }
+    } catch (e) {
+      setCompileError(e instanceof Error ? e.message : 'Compilation failed.')
+    } finally {
+      setCompiling(false)
+    }
   }
 
   // ── "Break it" mutations: prove the validator catches real mistakes ──
@@ -212,8 +245,7 @@ export default function WorkflowStudio() {
       return
     }
     fn(parsed.wf)
-    const next = pretty(parsed.wf)
-    setText(next)
+    setText(pretty(parsed.wf))
     const result = validateWorkflow(parsed.wf, snapshot)
     setValidation(result.ok ? { kind: 'ok' } : { kind: 'problems', problems: result.problems })
     setOutputs(null)
@@ -234,10 +266,7 @@ export default function WorkflowStudio() {
       run: () =>
         mutate(wf => {
           wf.output = Object.fromEntries(
-            Object.entries((wf.output ?? {}) as Record<string, string>).map(([k, v]) => [
-              k,
-              v.replace(/steps\.(\w+)/, 'steps.ghostStep'),
-            ]),
+            Object.entries((wf.output ?? {}) as Record<string, string>).map(([k, v]) => [k, v.replace(/steps\.(\w+)/, 'steps.ghostStep')]),
           )
         }),
     },
@@ -251,6 +280,13 @@ export default function WorkflowStudio() {
     },
   ]
 
+  const KEY_FIELDS: { field: Exclude<keyof Keys, 'r2'>; label: string; placeholder: string }[] = [
+    { field: 'anthropic', label: 'anthropic', placeholder: 'sk-ant-… (text)' },
+    { field: 'replicate', label: 'replicate', placeholder: 'r8_… (image)' },
+    { field: 'elevenlabs', label: 'elevenlabs', placeholder: 'xi-… (audio)' },
+    { field: 'kie', label: 'kie', placeholder: 'kie key (video)' },
+  ]
+
   return (
     <div className="studio" id="studio">
       <div className="studio__head">
@@ -258,11 +294,12 @@ export default function WorkflowStudio() {
           <span className="studio__eyebrow">
             <Sparkles size={12} strokeWidth={2} /> WORKFLOW STUDIO · LIVE
           </span>
-          <h2 className="studio__title">Author, validate and run a pipeline — right here.</h2>
+          <h2 className="studio__title">Author, validate and run a real multi-provider pipeline.</h2>
           <p className="studio__sub">
-            Every step routes to whatever provider you pick — Claude, OpenAI, Replicate, ElevenLabs, KIE, R2.
-            Validate and Run execute the real <code>ai-core</code> + <code>ai-workflow</code> engines in your
-            browser against fake adapters: no key, no cost, always live.
+            Three samples spanning all five capabilities and five providers — Claude, Replicate, ElevenLabs,
+            KIE, R2. <strong>Validate</strong> and <strong>Simulate</strong> run the real <code>ai-core</code> +{' '}
+            <code>ai-workflow</code> engines in your browser on fake adapters: no key, no cost. <strong>Run live
+            with your own keys</strong> and the deployed authority runs the real adapters end-to-end.
           </p>
         </div>
         <div className="studio__samples" role="tablist" aria-label="Sample pipelines">
@@ -291,7 +328,7 @@ export default function WorkflowStudio() {
       </div>
 
       <div className="studio__grid">
-        {/* ── Left: natural language + BYOK ── */}
+        {/* ── Left: natural language + compile ── */}
         <div className="studio__col">
           <label className="studio__field-label" htmlFor="studio-goal">
             <Wand2 size={12} strokeWidth={2} /> PLAIN-ENGLISH GOAL
@@ -303,35 +340,13 @@ export default function WorkflowStudio() {
             onChange={e => setGoal(e.target.value)}
             spellCheck={false}
           />
-
-          <div className="studio__byok">
-            <div className="studio__byok-head">
-              <KeyRound size={13} strokeWidth={2} />
-              <span>Compile with Claude — optional, off by default</span>
-            </div>
-            <p className="studio__byok-note">
-              Bring your <strong>own</strong> Anthropic key to author the workflow from the text above with the
-              real <code>compileWorkflow</code> repair loop. The request goes straight from your browser to
-              Anthropic and spends <strong>your</strong> tokens — never this project&apos;s. The key is held in
-              memory only and never sent anywhere else.
-            </p>
-            <div className="studio__byok-row">
-              <input
-                aria-label="Anthropic API key"
-                className="studio__key"
-                type="password"
-                placeholder="sk-ant-…  (your key, kept in memory)"
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <Button variant="secondary" onClick={onCompile} disabled={compiling}>
-                {compiling ? 'Compiling…' : 'Compile with Claude'}
-              </Button>
-            </div>
-            {compileError ? <Alert tone="error">{compileError}</Alert> : null}
+          <div className="studio__actions">
+            <Button variant="secondary" onClick={onCompile} disabled={compiling}>
+              <Wand2 size={14} strokeWidth={2} /> {compiling ? 'Compiling…' : 'Compile with the authority'}
+            </Button>
+            <span className="studio__free">uses your Anthropic key · real compileWorkflow</span>
           </div>
+          {compileError ? <Alert tone="error">{compileError}</Alert> : null}
         </div>
 
         {/* ── Right: editable workflow JSON ── */}
@@ -350,10 +365,10 @@ export default function WorkflowStudio() {
             <Button variant="primary" onClick={onValidate}>
               <ShieldCheck size={14} strokeWidth={2} /> Validate
             </Button>
-            <Button variant="secondary" onClick={onRun} disabled={running}>
-              <Play size={14} strokeWidth={2} /> {running ? 'Running…' : 'Run on fakes'}
+            <Button variant="secondary" onClick={onSimulate} disabled={running}>
+              <Play size={14} strokeWidth={2} /> {running ? 'Simulating…' : 'Simulate on fakes'}
             </Button>
-            <span className="studio__free">free · deterministic</span>
+            <span className="studio__free">free · deterministic · no key</span>
           </div>
           <div className="studio__breakers">
             <span className="studio__breakers-label">try breaking it:</span>
@@ -366,60 +381,59 @@ export default function WorkflowStudio() {
         </div>
       </div>
 
-      {/* ── Provider routing: swap any step's provider, re-validate live ── */}
-      {parsedSteps.length > 0 ? (
-        <div className="studio__pipeline">
-          <span className="studio__field-label">
-            <Shuffle size={12} strokeWidth={2} /> ROUTE EACH STEP TO ANY PROVIDER
-          </span>
-          <p className="studio__pipeline-note">
-            Same capability, your choice of provider. Change a dropdown — the workflow JSON updates and
-            re-validates instantly. That&apos;s the whole point: providers are swappable, your pipeline isn&apos;t rewritten.
-          </p>
-          <div className="studio__psteps">
-            {parsedSteps.map(s => {
-              const opts = snapshot.capabilities[s.capability] ?? []
-              return (
-                <div key={s.id} className="studio__pstep">
-                  <span className="studio__pstep-id">{s.id}</span>
-                  <span className="studio__pstep-cap">{s.capability}</span>
-                  <select
-                    className="studio__pselect"
-                    aria-label={`Provider for step ${s.id}`}
-                    value={s.provider ?? opts[0] ?? ''}
-                    disabled={opts.length === 0}
-                    onChange={e => setStepProvider(s.id, e.target.value)}
-                  >
-                    {opts.length === 0 ? (
-                      <option value="">— none registered —</option>
-                    ) : (
-                      opts.map(p => (
-                        <option key={p} value={p}>{p}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
-              )
-            })}
-          </div>
-          <div className="studio__legend">
-            <span className="studio__legend-label">registry</span>
-            {Object.entries(snapshot.capabilities).map(([cap, provs]) => (
-              <span key={cap} className="studio__legend-item">
-                <strong>{cap}</strong> → {provs.join(', ')}
-              </span>
-            ))}
+      {/* ── BYOK key panel → real run via the authority ── */}
+      <div className="studio__byok">
+        <div className="studio__byok-head">
+          <KeyRound size={13} strokeWidth={2} />
+          <span>Run live with your own keys</span>
+        </div>
+        <p className="studio__byok-note">
+          Fill the keys for the providers this pipeline uses, then <strong>Run live</strong>. Your keys are POSTed
+          only to the authority over HTTPS, used for this one run, and <strong>never stored or logged</strong>. Live
+          runs spend <strong>your</strong> provider credits. Leave a key blank and any step pinned to it is rejected
+          with a typed problem — nothing silently breaks. Endpoint: <code>{AUTHORITY_URL}</code>.
+        </p>
+        <div className="studio__keys">
+          {KEY_FIELDS.map(k => (
+            <label key={k.field} className="studio__keyfield">
+              <span className="studio__keyfield-label">{k.label}</span>
+              <input
+                className="studio__key"
+                type="password"
+                placeholder={k.placeholder}
+                value={keys[k.field] ?? ''}
+                onChange={e => setKey(k.field, e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+          ))}
+        </div>
+        <div className="studio__r2">
+          <span className="studio__r2-label">r2 (storage)</span>
+          <div className="studio__r2-grid">
+            <input className="studio__key" placeholder="account id" value={keys.r2!.accountId} onChange={e => setR2('accountId', e.target.value)} autoComplete="off" spellCheck={false} />
+            <input className="studio__key" placeholder="bucket" value={keys.r2!.bucket} onChange={e => setR2('bucket', e.target.value)} autoComplete="off" spellCheck={false} />
+            <input className="studio__key" type="password" placeholder="access key id" value={keys.r2!.accessKeyId} onChange={e => setR2('accessKeyId', e.target.value)} autoComplete="off" spellCheck={false} />
+            <input className="studio__key" type="password" placeholder="secret access key" value={keys.r2!.secretAccessKey} onChange={e => setR2('secretAccessKey', e.target.value)} autoComplete="off" spellCheck={false} />
+            <input className="studio__key studio__key--wide" placeholder="public base url (https://cdn…)" value={keys.r2!.publicUrl} onChange={e => setR2('publicUrl', e.target.value)} autoComplete="off" spellCheck={false} />
           </div>
         </div>
-      ) : null}
+        <div className="studio__actions">
+          <Button variant="primary" onClick={onRunLive} disabled={liveRunning}>
+            <Rocket size={14} strokeWidth={2} /> {liveRunning ? 'Running live…' : 'Run live with my keys'}
+          </Button>
+          <span className="studio__free studio__free--warn">spends your provider credits</span>
+        </div>
+      </div>
 
       {/* ── Validation result ── */}
       {validation.kind !== 'idle' ? (
         <div className="studio__result">
           {validation.kind === 'ok' ? (
             <Alert tone="success">
-              <strong>Valid.</strong> Every step capability is registered, every reference resolves, and the
-              graph is acyclic. The engine would run this exactly as written.
+              <strong>Valid.</strong> Every step capability is registered, every reference resolves, and the graph is
+              acyclic. The engine would run this exactly as written.
             </Alert>
           ) : validation.kind === 'parse' ? (
             <Alert tone="error">
@@ -448,7 +462,9 @@ export default function WorkflowStudio() {
       {/* ── Run trace + outputs ── */}
       {trace.length > 0 ? (
         <div className="studio__run">
-          <span className="studio__field-label"><Play size={12} strokeWidth={2} /> EXECUTION TRACE</span>
+          <span className="studio__field-label">
+            <Play size={12} strokeWidth={2} /> EXECUTION TRACE {outputsLive ? '· LIVE' : '· SIMULATED'}
+          </span>
           <div className="studio__trace">
             {trace.map(row => (
               <div key={row.stepId} className={`studio__step studio__step--${row.status}`}>
@@ -463,16 +479,22 @@ export default function WorkflowStudio() {
           {runError ? <Alert tone="error">{runError}</Alert> : null}
           {outputs ? (
             <Surface className="studio__outputs" padding="md">
-              <span className="studio__field-label">OUTPUTS</span>
+              <span className="studio__field-label">OUTPUTS {outputsLive ? '· real URLs' : '· fake URLs'}</span>
               <dl className="studio__output-list">
                 {Object.entries(outputs).map(([k, v]) => (
                   <div key={k} className="studio__output-row">
                     <dt>{k}</dt>
                     <dd>
                       {isUrl(v) ? (
-                        <a className="studio__output-link" href={v} onClick={e => e.preventDefault()} title="Fake URL — not followed">
-                          {v}
-                        </a>
+                        outputsLive ? (
+                          <a className="studio__output-link" href={v} target="_blank" rel="noreferrer">
+                            {v}
+                          </a>
+                        ) : (
+                          <a className="studio__output-link" href={v} onClick={e => e.preventDefault()} title="Fake URL — not followed">
+                            {v}
+                          </a>
+                        )
                       ) : (
                         summarizeOutput(v)
                       )}

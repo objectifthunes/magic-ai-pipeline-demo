@@ -1,12 +1,12 @@
 /**
  * A registry wired entirely to FAKE adapters — but registered under the REAL
- * provider names (anthropic, openai, replicate, elevenlabs, kie, r2), with
- * several providers per capability. That's the whole point of the demo:
- * provider-agnosticism. A workflow step pins `provider: "replicate"` or
- * `provider: "openai"` for the same `capability: "image"`, and the engine routes
- * accordingly. Swap the provider name and nothing else changes.
+ * provider names (anthropic, replicate, elevenlabs, kie, r2): one per capability,
+ * exactly the five the live ai-authority can run with bring-your-own keys. The
+ * demo never shows a provider that BYOK can't actually execute. A workflow step
+ * pins a `provider`, and the engine routes to it; to target a different vendor you
+ * register its adapter — the workflow never names a vendor inline.
  *
- * The Workflow Studio's "Run" button executes the REAL ai-workflow engine
+ * The Workflow Studio's free "Simulate" button executes the REAL ai-workflow engine
  * (validate → topo-sort → resolve references → call ports) against these fakes,
  * so a run never touches a real provider, never needs a key, never costs a cent.
  * Bytes are tiny file-signature stubs; URLs point at `*.invalid` hosts that
@@ -29,10 +29,10 @@ import {
  * first in each list is the registered default. Samples pin explicit providers,
  * so the mix is always visible. */
 export const DEMO_PROVIDERS = {
-  text: ['anthropic', 'openai'],
-  image: ['replicate', 'openai'],
+  text: ['anthropic'],
+  image: ['replicate'],
   audio: ['elevenlabs'],
-  video: ['kie', 'replicate'],
+  video: ['kie'],
   storage: ['r2'],
 } as const satisfies Record<string, readonly string[]>
 
