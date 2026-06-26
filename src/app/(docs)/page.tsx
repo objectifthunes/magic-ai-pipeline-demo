@@ -47,7 +47,7 @@ const { outputs } = await runWorkflow(workflow, registry, { topic: 'tidal energy
 const WHY = [
   { title: 'One contract, every modality', blurb: 'Five typed ports — text, image, audio, video, storage — so the same workflow drives Claude, Replicate, ElevenLabs, Kie and R2 without naming any of them.' },
   { title: 'Unbreakable by construction', blurb: 'A Zod schema, a registry-aware validator and a deterministic runner. A malformed pipeline is rejected with typed problems before a single token is spent.' },
-  { title: 'Reusable across products', blurb: 'The exact same engine powers relaxing-music apps, AI UGC video, and illustrated kids’ books — swap the steps, keep the guarantees.' },
+  { title: 'Reusable across any product', blurb: 'One engine, one set of guarantees. To target a different vendor you register its adapter and pin the step — the workflow, the validator and the runner never change.' },
 ]
 
 export default function HomePage() {
