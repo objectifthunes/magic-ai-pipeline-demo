@@ -17,16 +17,24 @@ pnpm add @objectifthunes/provider-replicate \\
 const QUICKSTART = `import { createRegistry } from '@objectifthunes/ai-core'
 import { compileWorkflow, validateWorkflow, runWorkflow } from '@objectifthunes/ai-workflow'
 import { createAnthropicTextProvider } from '@objectifthunes/provider-anthropic'
+import { createReplicateImageProvider } from '@objectifthunes/provider-replicate'
+import { createElevenLabsAudioProvider } from '@objectifthunes/provider-elevenlabs'
+import { createR2StorageProvider } from '@objectifthunes/provider-r2'
 
-// 1 — register the providers you have. The workflow never names a vendor.
+// 1 — register whatever providers you have. Several per capability is fine —
+//     steps pick one by name; nothing in the pipeline hard-codes a vendor.
 const registry = createRegistry()
-registry.register(createAnthropicTextProvider({ apiKey: process.env.ANTHROPIC_API_KEY }), { default: true })
-// registry.register(replicateImage); registry.register(elevenlabsAudio); registry.register(r2Storage)…
+registry.register(createAnthropicTextProvider({ apiKey: process.env.ANTHROPIC_API_KEY })) // text  → "anthropic"
+registry.register(createReplicateImageProvider())                                          // image → "replicate"
+registry.register(createElevenLabsAudioProvider())                                         // audio → "elevenlabs"
+registry.register(createR2StorageProvider())                                               // storage → "r2"
+// + createKieVideoProvider({ correlator, callbackUrl }) for video → "kie", same pattern.
 
-// 2 — author from one English sentence (self-correcting repair loop)
+// 2 — author from one English sentence (self-correcting repair loop).
+//     Want OpenAI images instead of Replicate? Register it and pin the step — nothing else changes.
 const snapshot = registry.snapshot()
 const workflow = await compileWorkflow(
-  'Relaxing rain soundscape with a hand-painted cover, store both and return URLs',
+  'Write a one-line hook, render a key image, compose a short score, store everything and return the URLs',
   snapshot,
   registry.get('text'),
 )
@@ -34,7 +42,7 @@ const workflow = await compileWorkflow(
 // 3 — the unbreakable gate, then run it
 const check = validateWorkflow(workflow, snapshot)
 if (!check.ok) throw new Error(check.problems.map(p => p.message).join('; '))
-const { outputs } = await runWorkflow(workflow, registry, { brief: 'soft rain at dusk' })`
+const { outputs } = await runWorkflow(workflow, registry, { topic: 'tidal energy' })`
 
 const WHY = [
   { title: 'One contract, every modality', blurb: 'Five typed ports — text, image, audio, video, storage — so the same workflow drives Claude, Replicate, ElevenLabs, Kie and R2 without naming any of them.' },

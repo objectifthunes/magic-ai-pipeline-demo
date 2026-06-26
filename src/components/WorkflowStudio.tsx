@@ -15,7 +15,7 @@
  *     never the project's.
  */
 import { useMemo, useState } from 'react'
-import { Sparkles, Play, ShieldCheck, KeyRound, Wand2, ChevronRight } from 'lucide-react'
+import { Sparkles, Play, ShieldCheck, KeyRound, Wand2, ChevronRight, Shuffle } from 'lucide-react'
 import { Button, Alert, Chip, Surface } from '@objectifthunes/whiteboard'
 import { validateWorkflow, runWorkflow, type WorkflowProblem, type StepResult } from '@objectifthunes/ai-workflow'
 import { createFakeRegistry } from '@/lib/fakeRegistry'
@@ -65,6 +65,19 @@ export default function WorkflowStudio() {
   const [compiling, setCompiling] = useState(false)
   const [compileError, setCompileError] = useState<string | null>(null)
 
+  // Steps parsed from the (possibly mid-edit) JSON — drives the provider-swap row.
+  const parsedSteps = useMemo<{ id: string; capability: string; provider?: string }[]>(() => {
+    try {
+      const w = JSON.parse(text) as { steps?: { id?: unknown; capability?: unknown; provider?: unknown }[] }
+      if (!Array.isArray(w.steps)) return []
+      return w.steps
+        .filter(s => s && typeof s.id === 'string' && typeof s.capability === 'string')
+        .map(s => ({ id: s.id as string, capability: s.capability as string, provider: typeof s.provider === 'string' ? s.provider : undefined }))
+    } catch {
+      return []
+    }
+  }, [text])
+
   const [validation, setValidation] = useState<ValidationState>({ kind: 'idle' })
   const [trace, setTrace] = useState<TraceRow[]>([])
   const [outputs, setOutputs] = useState<Record<string, unknown> | null>(null)
@@ -110,9 +123,9 @@ export default function WorkflowStudio() {
       setValidation({ kind: 'parse', message: parsed.message })
       return
     }
-    const wf = parsed.wf as { steps?: { id: string; capability: string }[]; inputs?: Record<string, unknown> }
-    // Seed the trace from the declared steps so every row is visible up front.
-    setTrace((wf.steps ?? []).map(s => ({ stepId: s.id, capability: s.capability, status: 'pending' as const })))
+    const wf = parsed.wf as { steps?: { id: string; capability: string; provider?: string }[]; inputs?: Record<string, unknown> }
+    // Seed the trace from the declared steps so every row (and its pinned provider) is visible up front.
+    setTrace((wf.steps ?? []).map(s => ({ stepId: s.id, capability: s.capability, provider: s.provider, status: 'pending' as const })))
     // Build run inputs from the declared inputs, seeded from the sample.
     const inputs: Record<string, unknown> = {}
     for (const key of Object.keys(wf.inputs ?? {})) {
@@ -174,6 +187,23 @@ export default function WorkflowStudio() {
     }
   }
 
+  // ── Provider swap: route a step to a different provider, re-validate live ──
+  function setStepProvider(stepId: string, provider: string) {
+    const parsed = parseWorkflow()
+    if (!parsed.ok) {
+      setValidation({ kind: 'parse', message: parsed.message })
+      return
+    }
+    const steps = (parsed.wf as { steps?: Record<string, unknown>[] }).steps
+    const step = steps?.find(s => s.id === stepId)
+    if (step) step.provider = provider
+    setText(pretty(parsed.wf))
+    const result = validateWorkflow(parsed.wf, snapshot)
+    setValidation(result.ok ? { kind: 'ok' } : { kind: 'problems', problems: result.problems })
+    setOutputs(null)
+    setTrace([])
+  }
+
   // ── "Break it" mutations: prove the validator catches real mistakes ──
   function mutate(fn: (wf: Record<string, unknown>) => void) {
     const parsed = parseWorkflow()
@@ -230,8 +260,9 @@ export default function WorkflowStudio() {
           </span>
           <h2 className="studio__title">Author, validate and run a pipeline — right here.</h2>
           <p className="studio__sub">
+            Every step routes to whatever provider you pick — Claude, OpenAI, Replicate, ElevenLabs, KIE, R2.
             Validate and Run execute the real <code>ai-core</code> + <code>ai-workflow</code> engines in your
-            browser, against fake adapters. No key, no cost, always live.
+            browser against fake adapters: no key, no cost, always live.
           </p>
         </div>
         <div className="studio__samples" role="tablist" aria-label="Sample pipelines">
@@ -247,6 +278,11 @@ export default function WorkflowStudio() {
               <span className="studio__sample-caps">
                 {s.caps.map(c => (
                   <span key={c} className="studio__cap">{c}</span>
+                ))}
+              </span>
+              <span className="studio__sample-provs">
+                {s.providers.map(p => (
+                  <span key={p} className="studio__prov">{p}</span>
                 ))}
               </span>
             </button>
@@ -329,6 +365,53 @@ export default function WorkflowStudio() {
           </div>
         </div>
       </div>
+
+      {/* ── Provider routing: swap any step's provider, re-validate live ── */}
+      {parsedSteps.length > 0 ? (
+        <div className="studio__pipeline">
+          <span className="studio__field-label">
+            <Shuffle size={12} strokeWidth={2} /> ROUTE EACH STEP TO ANY PROVIDER
+          </span>
+          <p className="studio__pipeline-note">
+            Same capability, your choice of provider. Change a dropdown — the workflow JSON updates and
+            re-validates instantly. That&apos;s the whole point: providers are swappable, your pipeline isn&apos;t rewritten.
+          </p>
+          <div className="studio__psteps">
+            {parsedSteps.map(s => {
+              const opts = snapshot.capabilities[s.capability] ?? []
+              return (
+                <div key={s.id} className="studio__pstep">
+                  <span className="studio__pstep-id">{s.id}</span>
+                  <span className="studio__pstep-cap">{s.capability}</span>
+                  <select
+                    className="studio__pselect"
+                    aria-label={`Provider for step ${s.id}`}
+                    value={s.provider ?? opts[0] ?? ''}
+                    disabled={opts.length === 0}
+                    onChange={e => setStepProvider(s.id, e.target.value)}
+                  >
+                    {opts.length === 0 ? (
+                      <option value="">— none registered —</option>
+                    ) : (
+                      opts.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+          <div className="studio__legend">
+            <span className="studio__legend-label">registry</span>
+            {Object.entries(snapshot.capabilities).map(([cap, provs]) => (
+              <span key={cap} className="studio__legend-item">
+                <strong>{cap}</strong> → {provs.join(', ')}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* ── Validation result ── */}
       {validation.kind !== 'idle' ? (
