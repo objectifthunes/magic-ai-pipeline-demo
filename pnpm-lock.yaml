@@ -15,8 +15,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       '@objectifthunes/ai-workflow':
-        specifier: ^0.1.0
-        version: 0.1.0(@objectifthunes/ai-core@0.1.0)
+        specifier: 0.2.0
+        version: 0.2.0(@objectifthunes/ai-core@0.1.0)
       '@objectifthunes/provider-anthropic':
         specifier: ^0.1.0
         version: 0.1.0(@anthropic-ai/sdk@0.32.1)(@objectifthunes/ai-core@0.1.0)
@@ -446,8 +446,8 @@ packages:
     resolution: {integrity: sha512-aAZ7d1CoKHO2LPBJSUt9KCtZWeGKAKV35iu7n05+Luoxgd4cRRYqXfZ6T82qF1n4cRsn+SNAD8YqkB/kIXCFTQ==}
     engines: {node: '>=20'}
 
-  '@objectifthunes/ai-workflow@0.1.0':
-    resolution: {integrity: sha512-bXLCZLjvY/reSshwkFd1AICEZHIko6UpfEGTAsu18fA8jumppM/hsXhjwLhVvBQK4eR454jlZFv75PXJ2e2Uow==}
+  '@objectifthunes/ai-workflow@0.2.0':
+    resolution: {integrity: sha512-MPs0IwNu06v5oTEjyy75S4mEjc53ViZgGq275p9y8fmxaCMH9qLhtVXipMTn8FDY6TAWAp9Sb6/ZbHDz6inWPw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@objectifthunes/ai-core': '>=0.1.0'
@@ -2628,7 +2628,7 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
 
-  '@objectifthunes/ai-workflow@0.1.0(@objectifthunes/ai-core@0.1.0)':
+  '@objectifthunes/ai-workflow@0.2.0(@objectifthunes/ai-core@0.1.0)':
     dependencies:
       '@objectifthunes/ai-core': 0.1.0
       zod: 3.25.76

@@ -11,7 +11,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@objectifthunes/ai-core": "^0.1.0",
-    "@objectifthunes/ai-workflow": "^0.1.0",
+    "@objectifthunes/ai-workflow": "0.2.0",
     "@objectifthunes/provider-anthropic": "^0.1.0",
     "@objectifthunes/whiteboard": "^0.7.1",
     "lucide-react": "^1.18.0",
